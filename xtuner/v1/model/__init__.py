@@ -11,7 +11,7 @@ from .compose.internvl import (
     InternVL3P5MoE30BA3Config,
     InternVLBaseConfig,
 )
-from .compose.qwen3_5 import Qwen3_5_VLDense4BConfig, Qwen3_5_VLMoE35BA3Config
+from .compose.qwen3_5 import Qwen3_5_VLDense4BConfig, Qwen3_5_VLDense27BConfig, Qwen3_5_VLMoE35BA3Config
 from .compose.qwen3_vl import (
     Qwen3VLDense4BConfig,
     Qwen3VLDense8BConfig,
@@ -40,6 +40,7 @@ model_mapping = {
     "internvl-3.5-1b-hf": InternVL3P5Dense1BConfig(),
     "internvl-3.5-30b-a3b-hf": InternVL3P5MoE30BA3Config(),
     "qwen3.5-vl-4b": Qwen3_5_VLDense4BConfig(),
+    "qwen3.8-vl-27b": Qwen3_5_VLDense27BConfig(),
     "glm-5.2": Glm52MoEConfig(),
 }
 
@@ -108,4 +109,5 @@ __all__ = [
     "XTunerBaseModelConfig",
     "Qwen3_5_VLMoE35BA3Config",
     "Qwen3_5_VLDense4BConfig",
+    "Qwen3_5_VLDense27BConfig",
 ]

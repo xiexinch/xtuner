@@ -96,3 +96,48 @@ class Qwen3_5_VLTextDense4BConfig(Qwen3_5_VLTextDenseConfig):
             partial_rotary_factor=0.25,
         )
     )
+
+
+class Qwen3_5_VLTextDense27BConfig(Qwen3_5_VLTextDenseConfig):
+    """Qwen3.8-27B text tower (the HF architecture remains Qwen3.5)."""
+
+    # The official checkpoint also has one dense MTP layer (15 ``mtp.*``
+    # tensors). Dense MTP is intentionally deferred; the compose loader loads
+    # each tower with ``strict=False``, so these checkpoint-only keys are skipped.
+
+    vocab_size: int = 248320
+    max_position_embeddings: int = 262144
+    pad_token_id: int | None = None
+    eos_token_id: int = 248044
+    num_hidden_layers: int = 64
+    hidden_size: int = 5120
+    intermediate_size: int = 17408
+    rms_norm_eps: float = 1e-6
+    hidden_act: str = "silu"
+    tie_word_embeddings: bool = False
+    attention: MHAConfig = MHAConfig(
+        with_gate=True,
+        num_attention_heads=24,
+        num_key_value_heads=4,
+        head_dim=256,
+        qk_norm=True,
+        rms_norm_eps=1e-6,
+        rms_norm_type="zero_centered",
+    )
+    linear_attention: GatedDeltaNetConfig = GatedDeltaNetConfig(
+        num_value_heads=48,
+        num_key_heads=16,
+        key_head_dim=128,
+        value_head_dim=128,
+        conv_kernel_dim=4,
+        hidden_act="silu",
+        rms_norm_eps=1e-6,
+    )
+    rope_parameters_cfg: RopeParametersConfig = Field(
+        default_factory=lambda: RopeParametersConfig(
+            rope_theta=10000000.0,
+            rope_type="qwen3_vl",
+            mrope_section=[11, 11, 10],
+            partial_rotary_factor=0.25,
+        )
+    )

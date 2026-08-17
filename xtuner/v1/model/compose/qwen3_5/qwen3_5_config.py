@@ -1,4 +1,8 @@
-from xtuner.v1.model.dense.qwen3_5_text import Qwen3_5_VLTextDense4BConfig, Qwen3_5_VLTextDenseConfig
+from xtuner.v1.model.dense.qwen3_5_text import (
+    Qwen3_5_VLTextDense4BConfig,
+    Qwen3_5_VLTextDense27BConfig,
+    Qwen3_5_VLTextDenseConfig,
+)
 from xtuner.v1.model.moe.qwen3_5_text import Qwen3_5_VLTextMoE35BA3BConfig, Qwen3_5_VLTextMoEConfig
 from xtuner.v1.model.moe.qwen3_5_text_split import (
     Qwen3_5_VLTextMoE35BA3BSplitConfig,
@@ -45,6 +49,19 @@ class Qwen3_5_VLDense4BConfig(Qwen3_5_BaseConfig):
     vision_config: Qwen3_5_VisionConfig = Qwen3_5_VisionConfig(depth=24, hidden_size=1024, intermediate_size=4096)
     projector_config: Qwen3_5_ProjectorConfig = Qwen3_5_ProjectorConfig(vision_hidden_size=1024, text_hidden_size=2560)
     text_config: Qwen3_5_VLTextDense4BConfig = Qwen3_5_VLTextDense4BConfig()
+
+
+class Qwen3_5_VLDense27BConfig(Qwen3_5_BaseConfig):
+    vision_config: Qwen3_5_VisionConfig = Qwen3_5_VisionConfig(
+        depth=27,
+        hidden_size=1152,
+        intermediate_size=4304,
+    )
+    projector_config: Qwen3_5_ProjectorConfig = Qwen3_5_ProjectorConfig(
+        vision_hidden_size=1152,
+        text_hidden_size=5120,
+    )
+    text_config: Qwen3_5_VLTextDense27BConfig = Qwen3_5_VLTextDense27BConfig()
 
 
 class Qwen3_5_VLMoE35BA3SplitConfig(Qwen3_5_BaseConfig):
