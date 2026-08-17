@@ -18,7 +18,7 @@ from pydantic import ConfigDict
 import transformers
 from transformers import AutoProcessor, PreTrainedTokenizer
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
-from xtuner.v1.data_proto.messages import ChatMessages, Qwen35ChatMessages
+from xtuner.v1.data_proto.messages import ChatMessages, Qwen35ChatMessages, Qwen38ChatMessages
 from xtuner.v1.data_proto.templates import CHAT_TEMPLATE_MAP, HybridChatTemplate
 from xtuner.v1.utils import get_logger, log_rank0
 
@@ -279,7 +279,7 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
         tokenizer: PreTrainedTokenizer,
         processor_path: str,
         anno_name: str,
-        chat_template: str = "qwen3-vl",  # qwen3.5-vl or qwen3-vl
+        chat_template: str = "qwen3-vl",  # qwen3-vl, qwen3.5-vl, or qwen3.8-vl
         min_pixels: int | None = None,  # Max image pixels (H*W) for image
         max_pixels: int | None = None,  # Min image pixels (H*W) for image
         video_min_frames: int | None = None,  # Min frames per video
@@ -307,6 +307,8 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
         trim_memory_interval: int = 1,
         add_generation_prompt: bool = False,
         enable_thinking: bool | None = None,
+        reasoning_effort: Literal["xhigh", "medium", "low"] = "xhigh",
+        preserve_thinking: bool = True,
     ):
         self.oss_loader = None
         self.debug = debug
@@ -355,6 +357,8 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
         self.add_generation_prompt = add_generation_prompt
         self.rand_video_max_frames = rand_video_max_frames
         self.enable_thinking = enable_thinking
+        self.reasoning_effort = reasoning_effort
+        self.preserve_thinking = preserve_thinking
 
         assert self.video_processor.min_frames <= rand_video_max_frames <= self.video_processor.max_frames, (
             f"rand_video_max_frames: {rand_video_max_frames} must be less than {self.video_processor.min_frames} or "
@@ -386,7 +390,8 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
             f"{self.video_processor.size['shortest_edge']}"
             f"_{self.video_processor.size['longest_edge']}_{self.video_processor.min_frames}_"
             f"{self.video_processor.max_frames}_{self.video_processor.fps}_{self.enable_3d_rope}_"
-            f"{self.add_vision_id}_{system_message}_{max_length}_{self.rand_video_max_frames}"
+            f"{self.add_vision_id}_{system_message}_{max_length}_{self.rand_video_max_frames}_"
+            f"{self.add_generation_prompt}_{self.enable_thinking}_{self.reasoning_effort}_{self.preserve_thinking}"
         )
 
         self.size = SimpleNamespace(
@@ -421,19 +426,56 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
             trim_memory_interval=trim_memory_interval,
         )
 
-    def calc_num_tokens_pure_text_get_item(self, data_item) -> CacheItem:
-        # It is expected that Qwen35ChatMessages is slightly slower than ChatMessages in the same data and same output.
+    def _build_dedicated_chat_messages(self, data_item: dict):
+        message_kwargs = {"messages": data_item["messages"], "tools": data_item.get("tools")}
         if self.chat_template_name == "qwen3.5-vl":
-            messages = Qwen35ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
-        else:
-            messages = ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
-        tokenized = messages.tokenize(
+            return Qwen35ChatMessages(**message_kwargs)
+        if self.chat_template_name == "qwen3.8-vl":
+            return Qwen38ChatMessages(**message_kwargs)
+        raise ValueError(f"{self.chat_template_name} does not use a dedicated chat renderer")
+
+    def _tokenize_dedicated_chat_messages(self, messages):
+        return messages.tokenize(
             self.tokenizer,
             self.chat_template,
             add_vision_id=self.add_vision_id,
             add_generation_prompt=self.add_generation_prompt,
             enable_thinking=self.enable_thinking,
+            reasoning_effort=self.reasoning_effort,
+            preserve_thinking=self.preserve_thinking,
         )
+
+    def _replace_dedicated_video_tokens(
+        self,
+        tokenized: dict,
+        num_image_token_list: list[list[int]],
+        total_sum_media_grid_thw: int,
+    ) -> None:
+        if self.chat_template_name == "qwen3.8-vl":
+            # The Qwen3.8 template emits one video placeholder per video. The
+            # processor expands that placeholder to the sum of its frame tokens.
+            num_media_tokens: list[int] | list[list[int]] = [
+                sum(frame_token_counts) for frame_token_counts in num_image_token_list
+            ]
+        else:
+            # Qwen3.5 emits one placeholder per temporal patch.
+            num_media_tokens = num_image_token_list
+        replace_qwen35_media_token(
+            tokenized,
+            self.video_context_token_id,
+            num_media_tokens,
+            total_sum_media_grid_thw,
+        )
+
+    def calc_num_tokens_pure_text_get_item(self, data_item) -> CacheItem:
+        if self.chat_template_name in ("qwen3.5-vl", "qwen3.8-vl"):
+            messages = self._build_dedicated_chat_messages(data_item)
+        else:
+            messages = ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
+        if self.chat_template_name in ("qwen3.5-vl", "qwen3.8-vl"):
+            tokenized = self._tokenize_dedicated_chat_messages(messages)
+        else:
+            tokenized = messages.tokenize(self.tokenizer, self.chat_template)
         input_ids = tokenized["input_ids"]
         labels = tokenized["labels"]
         input_ids, _ = self._truncated_input_and_labels(input_ids, labels)
@@ -460,8 +502,8 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
 
     def pure_text_get_item(self, data_item: dict) -> QwenVL3DataItem:
         is_pretrain = False
-        if self.chat_template_name == "qwen3.5-vl":
-            messages = Qwen35ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
+        if self.chat_template_name in ("qwen3.5-vl", "qwen3.8-vl"):
+            messages = self._build_dedicated_chat_messages(data_item)
             if len(data_item["messages"]) == 1 and data_item["messages"][0]["role"] == "pretrain":
                 is_pretrain = True
         else:
@@ -470,13 +512,10 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
                 is_pretrain = True
         assert is_pretrain is False, "Text pretrain data should not be processed by this function"
 
-        tokenized = messages.tokenize(
-            self.tokenizer,
-            self.chat_template,
-            add_vision_id=self.add_vision_id,
-            add_generation_prompt=self.add_generation_prompt,
-            enable_thinking=self.enable_thinking,
-        )
+        if self.chat_template_name in ("qwen3.5-vl", "qwen3.8-vl"):
+            tokenized = self._tokenize_dedicated_chat_messages(messages)
+        else:
+            tokenized = messages.tokenize(self.tokenizer, self.chat_template)
         input_ids = tokenized["input_ids"]
         labels: list[int] = tokenized["labels"]
 
@@ -523,17 +562,11 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
             return {"num_tokens": 0, "num_img_tokens": [0]}  # type: ignore
 
         is_pretrain = False
-        if self.chat_template_name == "qwen3.5-vl":
-            messages = Qwen35ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
+        if self.chat_template_name in ("qwen3.5-vl", "qwen3.8-vl"):
+            messages = self._build_dedicated_chat_messages(data_item)
             if len(data_item["messages"]) == 1 and data_item["messages"][0]["role"] == "pretrain":
                 is_pretrain = True
-            tokenized = messages.tokenize(
-                self.tokenizer,
-                self.chat_template,
-                add_vision_id=self.add_vision_id,
-                add_generation_prompt=self.add_generation_prompt,
-                enable_thinking=self.enable_thinking,
-            )
+            tokenized = self._tokenize_dedicated_chat_messages(messages)
             replace_qwen35_media_token(
                 tokenized, self.img_context_token_id, sum_media_grid_thw, sum_media_grid_thw.sum()
             )
@@ -586,17 +619,11 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
         grid_thw_merged = [merged_thw.prod().item() // self.merge_length for merged_thw in grid_thw]  # type: ignore
 
         is_pretrain = False
-        if self.chat_template_name == "qwen3.5-vl":
-            messages = Qwen35ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
+        if self.chat_template_name in ("qwen3.5-vl", "qwen3.8-vl"):
+            messages = self._build_dedicated_chat_messages(data_item)
             if len(data_item["messages"]) == 1 and data_item["messages"][0]["role"] == "pretrain":
                 is_pretrain = True
-            tokenized = messages.tokenize(
-                self.tokenizer,
-                self.chat_template,
-                add_vision_id=self.add_vision_id,
-                add_generation_prompt=self.add_generation_prompt,
-                enable_thinking=self.enable_thinking,
-            )
+            tokenized = self._tokenize_dedicated_chat_messages(messages)
             replace_qwen35_media_token(tokenized, self.img_context_token_id, grid_thw_merged, sum(grid_thw_merged))
         else:
             messages = ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
@@ -831,21 +858,14 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
             total_sum_media_grid_thw += sum_media_grid_thw
 
         is_pretrain = False
-        if self.chat_template_name == "qwen3.5-vl":
-            replace_video_timestamps_and_num_frame(data_item["messages"], num_image_token_list, timestamps_list)
-            messages = Qwen35ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
+        if self.chat_template_name in ("qwen3.5-vl", "qwen3.8-vl"):
+            if self.chat_template_name == "qwen3.5-vl":
+                replace_video_timestamps_and_num_frame(data_item["messages"], num_image_token_list, timestamps_list)
+            messages = self._build_dedicated_chat_messages(data_item)
             if len(data_item["messages"]) == 1 and data_item["messages"][0]["role"] == "pretrain":
                 is_pretrain = True
-            tokenized = messages.tokenize(
-                self.tokenizer,
-                self.chat_template,
-                add_vision_id=self.add_vision_id,
-                add_generation_prompt=self.add_generation_prompt,
-                enable_thinking=self.enable_thinking,
-            )
-            replace_qwen35_media_token(
-                tokenized, self.video_context_token_id, num_image_token_list, total_sum_media_grid_thw
-            )
+            tokenized = self._tokenize_dedicated_chat_messages(messages)
+            self._replace_dedicated_video_tokens(tokenized, num_image_token_list, total_sum_media_grid_thw)
         else:
             messages = ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
             if len(messages.messages) == 1 and messages.messages[0].role == "pretrain":
@@ -974,21 +994,14 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
             total_sum_media_grid_thw += sum_media_grid_thw
 
         is_pretrain = False
-        if self.chat_template_name == "qwen3.5-vl":
-            replace_video_timestamps_and_num_frame(data_item["messages"], num_image_tokens_list, timestamps_list)
-            messages = Qwen35ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
+        if self.chat_template_name in ("qwen3.5-vl", "qwen3.8-vl"):
+            if self.chat_template_name == "qwen3.5-vl":
+                replace_video_timestamps_and_num_frame(data_item["messages"], num_image_tokens_list, timestamps_list)
+            messages = self._build_dedicated_chat_messages(data_item)
             if len(data_item["messages"]) == 1 and data_item["messages"][0]["role"] == "pretrain":
                 is_pretrain = True
-            tokenized = messages.tokenize(
-                self.tokenizer,
-                self.chat_template,
-                add_vision_id=self.add_vision_id,
-                add_generation_prompt=self.add_generation_prompt,
-                enable_thinking=self.enable_thinking,
-            )
-            replace_qwen35_media_token(
-                tokenized, self.video_context_token_id, num_image_tokens_list, total_sum_media_grid_thw
-            )
+            tokenized = self._tokenize_dedicated_chat_messages(messages)
+            self._replace_dedicated_video_tokens(tokenized, num_image_tokens_list, total_sum_media_grid_thw)
         else:
             messages = ChatMessages(messages=data_item["messages"], tools=data_item.get("tools"))
             if len(messages.messages) == 1 and messages.messages[0].role == "pretrain":
@@ -1070,9 +1083,11 @@ class Qwen3VLTokenizeFnConfig(BaseMLLMTokenizeFnConfig):
     add_vision_id: bool = True
 
     trim_memory_interval: int = 1
-    chat_template: Literal["qwen3-vl", "qwen3-vl-rl", "qwen3.5-vl"] = "qwen3-vl"
+    chat_template: Literal["qwen3-vl", "qwen3-vl-rl", "qwen3.5-vl", "qwen3.8-vl"] = "qwen3-vl"
     add_generation_prompt: bool = False  # for rl
     enable_thinking: bool | None = None  # for rl, if None, will be determined by the messages
+    reasoning_effort: Literal["xhigh", "medium", "low"] = "xhigh"
+    preserve_thinking: bool = True
 
     def build(
         self, tokenizer, tokenizer_hash: str | None = None, anno_name: str = "", **kwargs
@@ -1106,4 +1121,6 @@ class Qwen3VLTokenizeFnConfig(BaseMLLMTokenizeFnConfig):
             trim_memory_interval=self.trim_memory_interval,
             add_generation_prompt=self.add_generation_prompt,
             enable_thinking=self.enable_thinking,
+            reasoning_effort=self.reasoning_effort,
+            preserve_thinking=self.preserve_thinking,
         )
