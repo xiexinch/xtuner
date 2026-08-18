@@ -518,14 +518,30 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
 
         self.max_seq_len_cached = config.max_position_embeddings
         self.original_max_seq_len = config.max_position_embeddings
-        self.rope_type = "default"
         self.config = config
+
+        rope_parameters_cfg = config.rope_parameters_cfg
+        if rope_parameters_cfg is not None:
+            self.rope_type = rope_parameters_cfg.rope_type
+        elif config.rope_scaling_cfg is not None:
+            self.rope_type = config.rope_scaling_cfg.type
+        else:
+            self.rope_type = "default"
+
+        # ``qwen3_vl`` is XTuner's legacy marker for default RoPE plus
+        # interleaved mRoPE.  Official Qwen3.8 long-context configs keep the
+        # same interleaving but switch the RoPE initializer itself to YaRN.
+        rope_init_type = "default" if self.rope_type == "qwen3_vl" else self.rope_type
+        assert rope_init_type in ["default", "linear", "yarn", "llama3"], (
+            f"Unsupported Qwen3-VL rope_type: {self.rope_type}. Supported types are: "
+            "'default', 'qwen3_vl', 'linear', 'yarn', and 'llama3'."
+        )
 
         # The implementation of RoPE has been refactored in Transformers V5, and
         # the following approach is used for compatibility.
         self.rope_init_fn: Callable = compute_default_rope_parameters
-        if self.rope_type != "default":
-            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        if rope_init_type != "default":
+            self.rope_init_fn = ROPE_INIT_FUNCTIONS[rope_init_type]
 
         inv_freq: torch.Tensor
         inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
@@ -534,8 +550,8 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
         self.original_inv_freq = self.inv_freq
 
         # Get mrope_section from rope_parameters_cfg (new format) or rope_scaling_cfg (old format)
-        if config.rope_parameters_cfg is not None:
-            self.mrope_section = config.rope_parameters_cfg.mrope_section
+        if rope_parameters_cfg is not None:
+            self.mrope_section = rope_parameters_cfg.mrope_section
         elif config.rope_scaling_cfg is not None:
             self.mrope_section = config.rope_scaling_cfg.mrope_section
         else:
@@ -596,7 +612,7 @@ def get_rope_embedding(config, device=None) -> RotaryEmbeddingProtocol:
     config = cast(TransformerConfig, config)
     rope_parameters_cfg = config.rope_parameters_cfg
 
-    if rope_parameters_cfg is not None and rope_parameters_cfg.rope_type == "qwen3_vl":
+    if rope_parameters_cfg is not None and rope_parameters_cfg.mrope_section is not None:
         return Qwen3VLTextRotaryEmbedding(config, device=device)
     elif rope_parameters_cfg is not None and rope_parameters_cfg.use_fope:
         log_rank0.info("Using FoPE rotary embedding.")
