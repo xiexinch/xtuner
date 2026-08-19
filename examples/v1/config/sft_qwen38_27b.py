@@ -1,4 +1,4 @@
-"""Standalone Qwen3.8-27B dense/VL SFT configuration.
+"""Qwen3.8-27B dense/VL SFT example configuration.
 
 Required environment variables:
     META_DATA_PATH
@@ -138,7 +138,19 @@ if use_yarn and max_position_embeddings > int(native_context_length * rope_scali
 rand_video_max_frames = _get_int_env("RAND_VIDEO_MAX_FRAMES", 24)
 num_workers = _get_int_env("NUM_WORKERS", 4)
 global_batch_size = _get_int_env("GLOBAL_BATCH_SIZE", 8)
-total_epoch = _get_int_env("TOTAL_EPOCH", 1)
+
+# TOTAL_STEP is intended for short end-to-end smoke runs. When it is set, it
+# takes the place of TOTAL_EPOCH because TrainerConfig requires exactly one of
+# the two stopping conditions. Normal training remains epoch-based by default.
+total_step_value = os.getenv("TOTAL_STEP")
+if total_step_value in {None, ""}:
+    total_step = None
+    total_epoch = _get_int_env("TOTAL_EPOCH", 1)
+else:
+    total_step = int(total_step_value)
+    if total_step < 1:
+        raise ValueError(f"TOTAL_STEP must be positive, got {total_step}")
+    total_epoch = None
 
 hf_interval = _get_int_env("HF_INTERVAL", 500)
 hf_max_keep = _get_int_env("HF_MAX_KEEP", 2)
@@ -361,10 +373,12 @@ trainer = TrainerConfig(
     lr_cfg=lr_cfg,
     loss_cfg=loss_cfg,
     global_batch_size=global_batch_size,
+    total_step=total_step,
     total_epoch=total_epoch,
     hf_interval=hf_interval,
     checkpoint_interval=checkpoint_interval,
     checkpoint_maxkeep=checkpoint_maxkeep,
     hf_max_keep=hf_max_keep,
     work_dir=work_dir,
+    debug_skip_save=_get_bool_env("DEBUG_SKIP_SAVE", False),
 )
