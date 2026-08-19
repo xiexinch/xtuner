@@ -61,7 +61,7 @@ In addition to pure text models, XTuner also supports **multimodal compose model
 | `Qwen3VLDense8BConfig` | `Qwen3VLBaseConfig` | `Qwen3VLTextDense8BConfig` | ~8B parameters, Dense VL |
 | `Qwen3_5_VLMoE35BA3Config` | `Qwen3_5_BaseConfig` | `Qwen3_5_VLTextMoE35BA3BConfig` | ~35B total / ~3B activated, MoE VL |
 | `Qwen3_5_VLDense4BConfig` | `Qwen3_5_BaseConfig` | `Qwen3_5_VLTextDense4BConfig` | ~4B parameters, Dense VL |
-| `Qwen3_5_VLDense27BConfig` | `Qwen3_5_BaseConfig` | `Qwen3_5_VLTextDense27BConfig` | ~27B parameters, Dense VL (Qwen3.8) |
+| `Qwen3_5_VLDense27BConfig` | `Qwen3_5_BaseConfig` | `Qwen3_5_VLTextDense27BConfig` | ~27B parameters, Dense VL (Qwen3.8; explicit config only) |
 | `InternVL3P5Dense8BConfig` | `InternVLBaseConfig` | `Qwen3Dense8BConfig` | ~8B parameters, Dense VL |
 | `InternVL3P5MoE30BA3Config` | `InternVLBaseConfig` | `Qwen3MoE30BA3Config` | ~30B total, MoE VL |
 | `InternVL3P5Dense1BConfig` | `InternVLBaseConfig` | `Qwen3Dense0P6BConfig` | ~1B parameters, Dense VL |

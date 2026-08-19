@@ -61,7 +61,7 @@ XTuner v1 的 `TrainEngine` 通过不同的 `TransformerConfig` 子类支持多�
 | `Qwen3VLDense8BConfig` | `Qwen3VLBaseConfig` | `Qwen3VLTextDense8BConfig` | 约 8B 参数，Dense VL |
 | `Qwen3_5_VLMoE35BA3Config` | `Qwen3_5_BaseConfig` | `Qwen3_5_VLTextMoE35BA3BConfig` | 约 35B 总参 / 约 3B 激活，MoE VL |
 | `Qwen3_5_VLDense4BConfig` | `Qwen3_5_BaseConfig` | `Qwen3_5_VLTextDense4BConfig` | 约 4B 参数，Dense VL |
-| `Qwen3_5_VLDense27BConfig` | `Qwen3_5_BaseConfig` | `Qwen3_5_VLTextDense27BConfig` | 约 27B 参数，Dense VL（Qwen3.8） |
+| `Qwen3_5_VLDense27BConfig` | `Qwen3_5_BaseConfig` | `Qwen3_5_VLTextDense27BConfig` | 约 27B 参数，Dense VL（Qwen3.8；仅支持显式配置） |
 | `InternVL3P5Dense8BConfig` | `InternVLBaseConfig` | `Qwen3Dense8BConfig` | 约 8B 参数，Dense VL |
 | `InternVL3P5MoE30BA3Config` | `InternVLBaseConfig` | `Qwen3MoE30BA3Config` | 约 30B 总参，MoE VL |
 | `InternVL3P5Dense1BConfig` | `InternVLBaseConfig` | `Qwen3Dense0P6BConfig` | 约 1B 参数，Dense VL |

@@ -52,6 +52,13 @@ class Qwen3_5_VLDense4BConfig(Qwen3_5_BaseConfig):
 
 
 class Qwen3_5_VLDense27BConfig(Qwen3_5_BaseConfig):
+    """Explicit config for Qwen3.8-27B.
+
+    Qwen3.8 and Qwen3.5 checkpoints both advertise ``model_type=qwen3_5``;
+    callers must therefore select this size config explicitly instead of using
+    ``get_model_config_from_hf``.
+    """
+
     vision_config: Qwen3_5_VisionConfig = Qwen3_5_VisionConfig(
         depth=27,
         hidden_size=1152,

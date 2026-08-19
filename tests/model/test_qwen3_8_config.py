@@ -1,10 +1,12 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from xtuner.v1.model import Qwen3_5_VLDense27BConfig, get_model_config
+from transformers import AutoConfig
+from xtuner.v1.model import Qwen3_5_VLDense27BConfig, get_model_config, get_model_config_from_hf
 from xtuner.v1.model.dense.qwen3_5_text import Qwen3_5_VLTextDense27BConfig
 
 
@@ -82,6 +84,17 @@ def test_qwen3_8_27b_compose_config_and_alias():
 
     alias_config = get_model_config("QWEN3.8_VL_27B")
     assert isinstance(alias_config, Qwen3_5_VLDense27BConfig)
+
+
+def test_qwen3_8_hf_path_requires_an_explicit_model_config(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        AutoConfig,
+        "from_pretrained",
+        lambda *args, **kwargs: SimpleNamespace(model_type="qwen3_5"),
+    )
+
+    with pytest.raises(ValueError, match="automatic model-config detection is ambiguous"):
+        get_model_config_from_hf(tmp_path)
 
 
 def test_qwen3_8_checkpoint_has_only_the_deferred_mtp_parameters():

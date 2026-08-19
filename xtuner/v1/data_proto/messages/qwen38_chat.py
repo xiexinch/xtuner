@@ -110,7 +110,7 @@ def _render_content(
             if add_vision_id:
                 rendered += f"Picture {image_count}: "
             rendered += "<|vision_start|><|image_pad|><|vision_end|>"
-        elif "video" in item or item.get("type") == "video":
+        elif "video" in item or "video_url" in item or item.get("type") in ("video", "video_url"):
             if is_system_content:
                 raise ValueError("System message cannot contain videos.")
             if do_vision_count:

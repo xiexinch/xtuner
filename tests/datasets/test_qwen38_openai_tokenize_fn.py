@@ -9,6 +9,7 @@ import os
 import pytest
 
 from transformers import AutoTokenizer
+from xtuner.v1.data_proto.messages.qwen38_chat import render_qwen38_chat
 from xtuner.v1.datasets import OpenaiTokenizeFunctionConfig
 
 
@@ -71,6 +72,28 @@ def _assert_token_span(tokenizer, tokenized, text, supervised, start=0):
     expected = span_ids if supervised else [IGNORE_INDEX] * len(span_ids)
     assert tokenized["labels"][index : index + len(span_ids)] == expected
     return index + len(span_ids)
+
+
+def test_xtuner_video_url_content_schema_is_supported():
+    """The MLLM dataset protocol uses video_url, while HF uses video."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video_url",
+                    "video_url": {"url": "ignored-by-chat-renderer.mp4"},
+                },
+                {"type": "text", "text": "Describe the video."},
+            ],
+        },
+        {"role": "assistant", "content": "A short video."},
+    ]
+
+    rendered, loss_mask = render_qwen38_chat(messages)
+
+    assert ("<|im_start|>user\n<|vision_start|><|video_pad|><|vision_end|>Describe the video.<|im_end|>\n") in rendered
+    assert len(rendered) == len(loss_mask)
 
 
 def test_default_preserves_all_reasoning_and_supervises_each_assistant(tokenizer, tokenize_fn):

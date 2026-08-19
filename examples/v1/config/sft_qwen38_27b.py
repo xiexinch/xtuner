@@ -10,6 +10,10 @@ The checkpoint at MODEL_PATH must be a complete Hugging Face Qwen3.8-27B
 directory so that XTuner can load its model weights, tokenizer, processor, and
 chat-template artifacts.
 
+Qwen3.8 model-config selection is explicit because its Hugging Face
+``model_type=qwen3_5`` is shared with Qwen3.5. This example therefore constructs
+``Qwen3_5_VLDense27BConfig`` directly.
+
 Set SAMPLE_MAX_LENGTH=PACK_MAX_LENGTH=MAX_POSITION_EMBEDDINGS=1000000 and
 ROPE_SCALING_FACTOR=4.0 to use the official static-YaRN 1M extension.
 """

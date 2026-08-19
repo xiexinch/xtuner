@@ -26,7 +26,10 @@ by one gated full-attention layer in every group of four. It reuses
 
 The compose config reuses `Qwen3_5_BaseConfig`, with a depth-27, hidden-1152
 vision tower and a 1152-to-5120 projector. The public alias is
-`qwen3.8-vl-27b`.
+`qwen3.8-vl-27b`. This integration supports **explicit config selection only**:
+use `Qwen3_5_VLDense27BConfig()` (as the SFT example does) or the
+`qwen3.8-vl-27b` alias. `get_model_config_from_hf` intentionally does not guess
+between Qwen3.5 and Qwen3.8 because both publish `model_type=qwen3_5`.
 
 ## Chat rendering and loss
 
@@ -41,6 +44,10 @@ revision, including:
   `<think>` from `content`;
 - raw string tool-argument values and JSON serialization for other values;
 - the Qwen3.8 tool and multimodal branches.
+
+The dedicated renderer also accepts XTuner's internal `video_url` content item
+as an alias for the official template's `video` item, so existing
+`VLMJsonlDataset` video annotations reach the same serialized video placeholder.
 
 Assistant role scaffolding and generation prompts are masked. Demonstrated
 assistant reasoning, content, tool calls, and the `<|im_end|>` boundary receive

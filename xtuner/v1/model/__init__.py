@@ -68,6 +68,12 @@ def get_model_config_from_hf(model_path: Path):
         return DeepSeekV3Config.from_hf(model_path)
     elif cfg.model_type == "glm_moe_dsa":
         return Glm52MoEConfig.from_hf(model_path)
+    elif cfg.model_type == "qwen3_5":
+        raise ValueError(
+            "Qwen3.5 and Qwen3.8 checkpoints share model_type='qwen3_5', so automatic model-config "
+            "detection is ambiguous. Select an explicit model config; for Qwen3.8-27B use "
+            "model_cfg='qwen3.8-vl-27b' or Qwen3_5_VLDense27BConfig()."
+        )
     else:
         raise ValueError(f"Unsupported model type: {cfg.model_type}")
 
