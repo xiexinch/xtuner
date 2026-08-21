@@ -11,6 +11,7 @@ import pytest
 from transformers import AutoTokenizer
 from xtuner.v1.data_proto.messages.qwen38_chat import render_qwen38_chat
 from xtuner.v1.datasets import OpenaiTokenizeFunctionConfig
+from xtuner.v1.datasets.mllm_tokenize_fn import qwen3_vl_tokenize_fn
 
 
 QWEN3_8_27B_PATH = os.environ.get("QWEN3_8_27B_PATH")
@@ -94,6 +95,97 @@ def test_xtuner_video_url_content_schema_is_supported():
 
     assert ("<|im_start|>user\n<|vision_start|><|video_pad|><|vision_end|>Describe the video.<|im_end|>\n") in rendered
     assert len(rendered) == len(loss_mask)
+
+
+def test_nonleading_system_message_is_strict_by_default():
+    messages = [
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "system", "content": "Updated constraint"},
+        {"role": "user", "content": "Second question"},
+    ]
+
+    with pytest.raises(ValueError, match="System message must be at the beginning"):
+        render_qwen38_chat(messages)
+
+
+def test_glm52_data_compat_renders_nonleading_system_as_masked_qwen_turn():
+    messages = [
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "system", "content": "Updated constraint"},
+        {"role": "user", "content": "Second question"},
+        {"role": "assistant", "content": "Second answer"},
+    ]
+
+    rendered, loss_mask = render_qwen38_chat(messages, glm52_data_compat=True)
+
+    system_turn = "<|im_start|>system\nUpdated constraint<|im_end|>\n"
+    system_start = rendered.index(system_turn)
+    system_end = system_start + len(system_turn)
+    final_answer = "Second answer<|im_end|>\n"
+    answer_start = rendered.index(final_answer)
+    answer_end = answer_start + len(final_answer)
+
+    assert system_turn in rendered
+    assert not any(loss_mask[system_start:system_end])
+    assert all(loss_mask[answer_start:answer_end])
+    assert len(rendered) == len(loss_mask)
+
+
+def test_qwen3_vl_config_forwards_glm52_data_compat(monkeypatch):
+    captured = {}
+
+    def fake_tokenize_function(*args, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(qwen3_vl_tokenize_fn, "Qwen3VLTokenizeFunction", fake_tokenize_function)
+    config = qwen3_vl_tokenize_fn.Qwen3VLTokenizeFnConfig(
+        processor_path="unused-in-test",
+        chat_template="qwen3.8-vl",
+        glm52_data_compat=True,
+    )
+
+    config.build(object(), tokenizer_hash="fixed-tokenizer-hash", anno_name="test-data")
+
+    assert captured["glm52_data_compat"] is True
+
+
+def test_openai_config_enables_glm52_data_compat(tokenizer):
+    messages = [
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "system", "content": "Updated constraint"},
+        {"role": "user", "content": "Second question"},
+        {"role": "assistant", "content": "Second answer"},
+    ]
+    strict_fn = OpenaiTokenizeFunctionConfig(chat_template="qwen3.8-vl").build(
+        tokenizer,
+        tokenizer_hash="fixed-tokenizer-hash",
+    )
+    compat_fn = OpenaiTokenizeFunctionConfig(
+        chat_template="qwen3.8-vl",
+        glm52_data_compat=True,
+    ).build(tokenizer, tokenizer_hash="fixed-tokenizer-hash")
+
+    with pytest.raises(ValueError, match="System message must be at the beginning"):
+        strict_fn({"messages": messages})
+    with pytest.raises(Exception, match="System message must be at the beginning"):
+        _hf_render(tokenizer, messages)
+
+    tokenized = compat_fn({"messages": messages})
+    rendered = tokenizer.decode(tokenized["input_ids"], skip_special_tokens=False)
+
+    assert compat_fn.hash() != strict_fn.hash()
+    _assert_token_span(
+        tokenizer,
+        tokenized,
+        "<|im_start|>system\nUpdated constraint<|im_end|>\n",
+        False,
+    )
+    _assert_token_span(tokenizer, tokenized, "Second answer<|im_end|>\n", True)
+    assert rendered.count("Updated constraint") == 1
 
 
 def test_default_preserves_all_reasoning_and_supervises_each_assistant(tokenizer, tokenize_fn):

@@ -309,6 +309,7 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
         enable_thinking: bool | None = None,
         reasoning_effort: Literal["xhigh", "medium", "low"] = "xhigh",
         preserve_thinking: bool = True,
+        glm52_data_compat: bool = False,
     ):
         self.oss_loader = None
         self.debug = debug
@@ -359,6 +360,7 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
         self.enable_thinking = enable_thinking
         self.reasoning_effort = reasoning_effort
         self.preserve_thinking = preserve_thinking
+        self.glm52_data_compat = glm52_data_compat
 
         assert self.video_processor.min_frames <= rand_video_max_frames <= self.video_processor.max_frames, (
             f"rand_video_max_frames: {rand_video_max_frames} must be less than {self.video_processor.min_frames} or "
@@ -391,7 +393,8 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
             f"_{self.video_processor.size['longest_edge']}_{self.video_processor.min_frames}_"
             f"{self.video_processor.max_frames}_{self.video_processor.fps}_{self.enable_3d_rope}_"
             f"{self.add_vision_id}_{system_message}_{max_length}_{self.rand_video_max_frames}_"
-            f"{self.add_generation_prompt}_{self.enable_thinking}_{self.reasoning_effort}_{self.preserve_thinking}"
+            f"{self.add_generation_prompt}_{self.enable_thinking}_{self.reasoning_effort}_{self.preserve_thinking}_"
+            f"glm52compat{self.glm52_data_compat}"
         )
 
         self.size = SimpleNamespace(
@@ -443,6 +446,7 @@ class Qwen3VLTokenizeFunction(BaseMLLMTokenizeFunction):
             enable_thinking=self.enable_thinking,
             reasoning_effort=self.reasoning_effort,
             preserve_thinking=self.preserve_thinking,
+            glm52_data_compat=self.glm52_data_compat,
         )
 
     def _replace_dedicated_video_tokens(
@@ -1088,6 +1092,7 @@ class Qwen3VLTokenizeFnConfig(BaseMLLMTokenizeFnConfig):
     enable_thinking: bool | None = None  # for rl, if None, will be determined by the messages
     reasoning_effort: Literal["xhigh", "medium", "low"] = "xhigh"
     preserve_thinking: bool = True
+    glm52_data_compat: bool = False
 
     def build(
         self, tokenizer, tokenizer_hash: str | None = None, anno_name: str = "", **kwargs
@@ -1123,4 +1128,5 @@ class Qwen3VLTokenizeFnConfig(BaseMLLMTokenizeFnConfig):
             enable_thinking=self.enable_thinking,
             reasoning_effort=self.reasoning_effort,
             preserve_thinking=self.preserve_thinking,
+            glm52_data_compat=self.glm52_data_compat,
         )

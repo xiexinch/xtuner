@@ -1,0 +1,237 @@
+# syntax=docker/dockerfile:1.10
+
+# CUDA 13.2.1, Python 3.12, PyTorch 2.12 nightly, NCCL, and NVIDIA's
+# matching CUDA runtime. 26.04 is intentional: causal-conv1d publishes an
+# official wheel specifically for this NGC PyTorch release.
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.04-py3
+FROM ${BASE_IMAGE}
+
+ARG XTUNER_REVISION=1e6ed678c3b5734faa569f66c76a4356fab85e6a
+
+# Build-only Python package indexes. These are exported only inside pip RUN
+# instructions and are not retained in the final image environment.
+ARG PIP_INDEX_URL=http://mirrors.i.h.pjlab.org.cn/pypi/simple/
+ARG PIP_EXTRA_INDEX_URL=http://pypi.i.h.pjlab.org.cn/brain/dev/+simple
+ARG PIP_TRUSTED_HOST="mirrors.i.h.pjlab.org.cn pypi.i.h.pjlab.org.cn"
+
+# Build-only cluster proxy. ARG values are available to RUN instructions but
+# are not written to the final image's Config.Env. Pass empty values to build
+# without the cluster proxy, or override them for another environment.
+ARG HTTP_PROXY=http://httpproxy-headless.kubebrain.svc.pjlab.local:3128
+ARG HTTPS_PROXY=http://httpproxy-headless.kubebrain.svc.pjlab.local:3128
+ARG NO_PROXY=localhost,127.0.0.1
+
+# Official prebuilt wheel for NGC PyTorch 26.04 (CUDA 13, Python 3.12,
+# CXX11 ABI, linux/amd64). Override both args when using an internal mirror.
+ARG CAUSAL_CONV1D_WHEEL_URL=https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.6.2.post1/causal_conv1d-1.6.2.post1%2Bcu13torch26.04cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+ARG CAUSAL_CONV1D_WHEEL_SHA256=4d792a1fdb27c1e164caa6e1e9a469be9d16b1f1480ddcb03c15117d3bbdc898
+
+# NGC normally provides FlashAttention compiled against its own PyTorch.
+# These optional args allow an internal, ABI-matched wheel to be supplied if
+# a locally mirrored BASE_IMAGE does not contain it. There is no source-build
+# fallback in this SFT image.
+ARG FLASH_ATTN_WHEEL_URL=
+ARG FLASH_ATTN_WHEEL_SHA256=
+
+LABEL org.opencontainers.image.title="XTuner Qwen3.8 dense SFT (CUDA 13.2)" \
+      org.opencontainers.image.revision="${XTUNER_REVISION}"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore \
+    TOKENIZERS_PARALLELISM=false
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Only runtime and multi-node diagnostics used by SFT jobs are added here.
+# Lower-case proxy variables exist only in this RUN process; no apt proxy file
+# or proxy ENV is left behind in the resulting image.
+RUN export http_proxy="${HTTP_PROXY}" \
+        https_proxy="${HTTPS_PROXY}" \
+        no_proxy="${NO_PROXY}" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        dnsutils \
+        ffmpeg \
+        git \
+        iproute2 \
+        netcat-openbsd \
+        numactl \
+        procps \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# NGC constrains every package in the base image. XTuner needs newer
+# Transformers/FLA, while PyTorch itself is deliberately left untouched.
+RUN if [[ -f /etc/pip/constraint.txt ]]; then : > /etc/pip/constraint.txt; fi
+
+# Avoid the CUDA-binary warning from an unrelated bitsandbytes installation,
+# and replace any NGC OpenCV variant with the headless wheel pinned below.
+RUN { python -m pip uninstall -y \
+          bitsandbytes \
+          opencv \
+          opencv-contrib-python \
+          opencv-python \
+          opencv-python-headless \
+      || true; } \
+    && rm -rf /usr/local/lib/python3.12/dist-packages/cv2
+
+# Fail before downloading dependencies if a different base image is supplied.
+RUN python - <<'PY'
+import platform
+
+import torch
+
+assert platform.machine() == "x86_64", platform.machine()
+assert torch.version.cuda and torch.version.cuda.startswith("13.2"), torch.version.cuda
+assert torch._C._GLIBCXX_USE_CXX11_ABI, "NGC 26.04 CXX11 ABI is required"
+assert torch.distributed.is_nccl_available(), "NCCL backend is required for multi-node SFT"
+print(f"base torch={torch.__version__} cuda={torch.version.cuda} abi=cxx11")
+PY
+
+# SFT-only Python dependencies. The base Ray wheel is needed because the
+# current XTuner import path eagerly imports xtuner.v1.rl.utils, even for SFT;
+# Ray's optional default/web stack is deliberately not installed. Intentionally
+# omitted: bitsandbytes, TileLang, Apache TVM FFI, the remaining RL/inference
+# stack, DeepEP, DeepGEMM, grouped_gemm, and FP8 add-ons.
+# PyTorch/torchvision/FlashAttention are retained from NGC.
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    --mount=type=secret,id=HTTPS_PROXY,env=https_proxy \
+    --mount=type=secret,id=HTTP_PROXY,env=http_proxy \
+    --mount=type=secret,id=NO_PROXY,env=no_proxy \
+    export http_proxy="${http_proxy:-${HTTP_PROXY}}" \
+        https_proxy="${https_proxy:-${HTTPS_PROXY}}" \
+        no_proxy="${no_proxy:-${NO_PROXY}}" \
+        PIP_INDEX_URL="${PIP_INDEX_URL}" \
+        PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL}" \
+        PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}" \
+    && python -m pip install --only-binary=ray \
+        astor \
+        av \
+        codetiming \
+        cyclopts \
+        "datasets<4.0.0" \
+        decord \
+        einops \
+        GitPython \
+        hatchling \
+        imageio \
+        jsonlines \
+        loguru \
+        "mmengine==0.11.0rc2" \
+        more-itertools \
+        ninja \
+        "opencv-python-headless<=4.12.0.88" \
+        openpyxl \
+        "peft>=0.14.0" \
+        "py-libnuma==1.2" \
+        pyarrow \
+        pydantic \
+        ray \
+        scikit-image \
+        scipy \
+        SentencePiece \
+        tensorboard \
+        tiktoken \
+        timm \
+        "transformers==5.14.1" \
+        transformers_stream_generator \
+        xxhash
+
+# Install only binary CUDA artifacts. FLA 0.4.2 itself is Python/Triton code;
+# causal-conv1d is the official NGC-specific wheel verified by its release hash.
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    --mount=type=secret,id=HTTPS_PROXY,env=https_proxy \
+    --mount=type=secret,id=HTTP_PROXY,env=http_proxy \
+    --mount=type=secret,id=NO_PROXY,env=no_proxy \
+    export http_proxy="${http_proxy:-${HTTP_PROXY}}" \
+        https_proxy="${https_proxy:-${HTTPS_PROXY}}" \
+        no_proxy="${no_proxy:-${NO_PROXY}}" \
+        PIP_INDEX_URL="${PIP_INDEX_URL}" \
+        PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL}" \
+        PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}" \
+    && python -m pip install --no-deps \
+        "${CAUSAL_CONV1D_WHEEL_URL}#sha256=${CAUSAL_CONV1D_WHEEL_SHA256}" \
+    && python -m pip install --no-deps \
+        "fla-core==0.4.2" \
+        "flash-linear-attention==0.4.2"
+
+# Keep the NGC FlashAttention binary when present. An explicitly supplied
+# prebuilt wheel is the only fallback; this image never invokes nvcc here.
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    --mount=type=secret,id=HTTPS_PROXY,env=https_proxy \
+    --mount=type=secret,id=HTTP_PROXY,env=http_proxy \
+    --mount=type=secret,id=NO_PROXY,env=no_proxy \
+    export http_proxy="${http_proxy:-${HTTP_PROXY}}" \
+        https_proxy="${https_proxy:-${HTTPS_PROXY}}" \
+        no_proxy="${no_proxy:-${NO_PROXY}}" \
+        PIP_INDEX_URL="${PIP_INDEX_URL}" \
+        PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL}" \
+        PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST}"; \
+    if ! python -c 'from flash_attn.flash_attn_interface import flash_attn_gpu'; then \
+        if [[ -z "${FLASH_ATTN_WHEEL_URL}" ]]; then \
+            echo "ERROR: BASE_IMAGE has no FlashAttention 2 binary." >&2; \
+            echo "Supply an ABI-matched prebuilt wheel with FLASH_ATTN_WHEEL_URL." >&2; \
+            exit 1; \
+        fi; \
+        flash_attn_requirement="${FLASH_ATTN_WHEEL_URL}"; \
+        if [[ -n "${FLASH_ATTN_WHEEL_SHA256}" ]]; then \
+            flash_attn_requirement+="#sha256=${FLASH_ATTN_WHEEL_SHA256}"; \
+        fi; \
+        python -m pip install --no-deps "${flash_attn_requirement}"; \
+    fi
+
+WORKDIR /opt/xtuner
+
+# Copy only the installable project metadata and package source. Training
+# configs remain external and are provided through CONFIG_FILE at launch time.
+COPY pyproject.toml README.md README_zh-CN.md LICENSE MANIFEST.in setup.cfg ./
+COPY xtuner ./xtuner
+
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    python -m pip install --no-build-isolation --no-deps .
+
+# Build-time smoke test for the exact imports that failed in the old image.
+# GPU kernels themselves are exercised when the image is launched with GPUs.
+RUN python - <<'PY'
+from importlib.metadata import version
+
+import causal_conv1d_cuda
+import ray
+import torch
+import transformers
+from fla.modules import FusedRMSNormGated
+from fla.ops.cp import FLACPContext
+from fla.ops.gated_delta_rule.chunk import chunk_gated_delta_rule_fwd
+from fla.ops.utils.index import prepare_chunk_indices
+from flash_attn.flash_attn_interface import flash_attn_gpu
+from xtuner.v1.config import FSDPConfig, LRConfig, MuonConfig
+from xtuner.v1.datasets import PretrainTokenizeFunctionConfig, Qwen3VLTokenizeFnConfig
+from xtuner.v1.datasets.config import DataloaderConfig, DatasetConfig
+from xtuner.v1.datasets.mllm_tokenize_fn import OSSLoaderConfig
+from xtuner.v1.float8.config import Float8Config, ScalingGranularity
+from xtuner.v1.loss import CELossConfig
+from xtuner.v1.model import Qwen3_5_VLDense27BConfig
+from xtuner.v1.model.compose.qwen3_vl.modeling_qwen3_vl import QWEN3VL_COMPILE_CFG
+from xtuner.v1.module.rope import RopeParametersConfig
+from xtuner.v1.train import ResumeConfig, TrainerConfig
+
+assert transformers.__version__ == "5.14.1", transformers.__version__
+assert version("fla-core") == "0.4.2", version("fla-core")
+assert version("flash-linear-attention") == "0.4.2", version("flash-linear-attention")
+assert torch.version.cuda and torch.version.cuda.startswith("13.2"), torch.version.cuda
+assert torch.distributed.is_nccl_available(), "NCCL backend is required for multi-node SFT"
+print(
+    "SFT image ready:",
+    f"torch={torch.__version__}",
+    f"cuda={torch.version.cuda}",
+    f"flash-attn={version('flash-attn')}",
+    f"causal-conv1d={version('causal-conv1d')}",
+    f"fla-core={version('fla-core')}",
+    f"ray={ray.__version__}",
+)
+PY
+
+CMD ["/bin/bash"]

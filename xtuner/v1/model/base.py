@@ -1881,19 +1881,30 @@ class BaseModel(nn.Module):
     def _write_hf_index_and_config(self, hf_dir: Path | str, weight_map: Mapping[str, str]) -> None:
         if isinstance(hf_dir, str):
             hf_dir = Path(hf_dir)
+        hf_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.config.hf_config is not None:
-            self.config.save_hf(hf_dir)
-        elif self._hf_path is not None:
-            for file in cast(Path, self._hf_path).iterdir():
-                if file.suffix != ".safetensors":
-                    target_path = hf_dir / file.name
-                    if file.is_file():
-                        copy(file, target_path)
-                    else:
-                        copytree(file, target_path, ignore_dangling_symlinks=True, dirs_exist_ok=True)
-        else:
+        hf_config = self.config.hf_config
+        if hf_config is None and self._hf_path is None:
             raise RuntimeError("Internal Error, both self.config.hf_config and self._hf_path are None")
+
+        # Keep tokenizer, processor, generation, chat-template, and custom-code
+        # artifacts from the source checkpoint even when XTuner can regenerate
+        # config.json. The generated config is written afterwards so runtime
+        # changes such as a 1M YaRN extension win over the source 256K config.
+        if self._hf_path is not None:
+            for file in cast(Path, self._hf_path).iterdir():
+                if file.suffix == ".safetensors":
+                    continue
+                if hf_config is not None and file.name in {"config.json", "model.safetensors.index.json"}:
+                    continue
+                target_path = hf_dir / file.name
+                if file.is_file():
+                    copy(file, target_path)
+                else:
+                    copytree(file, target_path, ignore_dangling_symlinks=True, dirs_exist_ok=True)
+
+        if hf_config is not None:
+            hf_config.save_pretrained(hf_dir)
 
         with open(hf_dir / "model.safetensors.index.json", "w") as f:
             index = {"weight_map": dict(weight_map), "metadata": {}}
@@ -2004,25 +2015,7 @@ class BaseModel(nn.Module):
         weight_map = reduce(lambda x, y: x | y, weight_map_list)
 
         if not dist.is_initialized() or dist.get_rank() == 0:
-            if self.config.hf_config is None and self._hf_path is None:
-                raise RuntimeError("Internal Error, both self.config.hf_config and self._hf_path are None")
-
-            if self.config.hf_config is not None:
-                self.config.save_hf(hf_dir)
-            else:  # if self._hf_path is not None:
-                for file in cast(Path, self._hf_path).iterdir():
-                    if file.suffix != ".safetensors":
-                        # Copy the model config and tokenizer files to the save path
-                        target_path = hf_dir / file.name
-                        if file.is_file():
-                            copy(file, target_path)
-                        else:
-                            copytree(file, target_path, ignore_dangling_symlinks=True, dirs_exist_ok=True)
-
-            # write or overwrite `model.safetensors.index.json`
-            with open(hf_dir / "model.safetensors.index.json", "w") as f:
-                index = {"weight_map": weight_map, "metadata": {}}
-                json.dump(index, f, indent=2, ensure_ascii=False)
+            self._write_hf_index_and_config(hf_dir=hf_dir, weight_map=weight_map)
 
         if dist.is_initialized():
             torch.distributed.barrier()

@@ -26,6 +26,7 @@ class OpenaiTokenizeFunction(CachableTokenizeFunction[DataItem]):
         tokenizer_hash: str | None = None,
         max_length: int | None = None,
         hash: str | None = None,
+        glm52_data_compat: bool = False,
     ):
         assert chat_template in CHAT_TEMPLATE_MAP, (
             f"chat_template {chat_template} not found in {CHAT_TEMPLATE_MAP.keys()}"
@@ -35,6 +36,7 @@ class OpenaiTokenizeFunction(CachableTokenizeFunction[DataItem]):
         self._hash = hash
         self._tokenizer_hash = tokenizer_hash
         self.max_length = max_length
+        self.glm52_data_compat = glm52_data_compat
         super().__init__(tokenizer)
 
     @with_proxy_attention_flops
@@ -59,6 +61,7 @@ class OpenaiTokenizeFunction(CachableTokenizeFunction[DataItem]):
             messages = Glm52ChatMessages(messages=item, tools=tools)
         else:
             messages = ChatMessages(messages=item, tools=tools)
+        kwargs.setdefault("glm52_data_compat", self.glm52_data_compat)
         tokenized = messages.tokenize(self.tokenizer, self.chat_template, **kwargs)
 
         input_ids = tokenized["input_ids"]
@@ -90,7 +93,7 @@ class OpenaiTokenizeFunction(CachableTokenizeFunction[DataItem]):
                 + hashlib.sha256(inspect.getsource(self.__class__.__init__).encode()).hexdigest()[:16]
             )
 
-            self._hash = f"{_tokenizer_hash}_{_template_hash}_{_source_hash}"
+            self._hash = f"{_tokenizer_hash}_{_template_hash}_{_source_hash}_glm52compat{int(self.glm52_data_compat)}"
         else:
             assert isinstance(self._hash, str), (
                 "hash is not a valid string, it means `FtdpTokenizeFunction._hash` is modified by user."
@@ -105,6 +108,7 @@ class OpenaiTokenizeFunctionConfig(BaseModel):
     chat_template: Annotated[str, Parameter(group="tokenize_fn")]
     max_length: int | None = None
     hash: Annotated[str | None, Parameter(group="tokenize_fn")] = None
+    glm52_data_compat: bool = False
 
     def build(
         self, tokenizer, tokenizer_hash: str | None = None, anno_name: str | None = None, **kwargs
@@ -115,4 +119,5 @@ class OpenaiTokenizeFunctionConfig(BaseModel):
             hash=self.hash,
             tokenizer_hash=tokenizer_hash,
             max_length=self.max_length,
+            glm52_data_compat=self.glm52_data_compat,
         )

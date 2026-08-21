@@ -6,6 +6,9 @@ Required environment variables:
     WORK_DIR
     TOKENIZER_CACHE_DIR
 
+Set GLM52_DATA_COMPAT=1 when the SFT corpus contains GLM-5.2 trajectories
+with system messages after the first turn.
+
 The checkpoint at MODEL_PATH must be a complete Hugging Face Qwen3.8-27B
 directory so that XTuner can load its model weights, tokenizer, processor, and
 chat-template artifacts.
@@ -94,6 +97,7 @@ chat_template_name = os.getenv("CHAT_TEMPLATE_NAME", "qwen3.8-vl")
 enable_thinking = _get_bool_env("ENABLE_THINKING", True)
 reasoning_effort = os.getenv("REASONING_EFFORT", "xhigh")
 preserve_thinking = _get_bool_env("PRESERVE_THINKING", True)
+glm52_data_compat = _get_bool_env("GLM52_DATA_COMPAT", False)
 
 if chat_template_name != "qwen3.8-vl":
     raise ValueError(f"Qwen3.8-27B must use CHAT_TEMPLATE_NAME=qwen3.8-vl, got {chat_template_name!r}")
@@ -279,7 +283,8 @@ has_pretrain = any(data.get("text_pretrain", False) for data in ds_collections.v
 tokenize_cache_tag = (
     f"qwen38_dense27b_v1_sample{sample_max_length}_ctx{max_position_embeddings}_"
     f"yarn{rope_scaling_factor if use_yarn else 0}_"
-    f"{reasoning_effort}_thinking{int(enable_thinking)}_preserve{int(preserve_thinking)}"
+    f"{reasoning_effort}_thinking{int(enable_thinking)}_preserve{int(preserve_thinking)}_"
+    f"glm52compat{int(glm52_data_compat)}"
 )
 
 dataset_config: list[dict[str, Any]] = []
@@ -304,6 +309,7 @@ for name, data in ds_collections.items():
             enable_thinking=enable_thinking,
             reasoning_effort=reasoning_effort,
             preserve_thinking=preserve_thinking,
+            glm52_data_compat=glm52_data_compat,
             debug=_get_bool_env("TOKENIZE_DEBUG", True),
         )
 

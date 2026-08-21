@@ -159,8 +159,13 @@ def render_qwen38_chat(
     enable_thinking: bool | None = True,
     reasoning_effort: Literal["xhigh", "medium", "low"] = "xhigh",
     preserve_thinking: bool = True,
+    glm52_data_compat: bool = False,
 ) -> tuple[str, list[bool]]:
-    """Render the pinned Qwen3.8 template and its SFT character loss mask."""
+    """Render the pinned Qwen3.8 template and its SFT character loss mask.
+
+    ``glm52_data_compat`` accepts non-leading system messages emitted by GLM-5.2
+    training pipelines. The default remains strict Qwen3.8 template parity.
+    """
     if not messages:
         raise ValueError("No messages provided.")
     if enable_thinking is None:
@@ -247,7 +252,12 @@ def render_qwen38_chat(
 
         if role == "system":
             if index != 0:
-                raise ValueError("System message must be at the beginning.")
+                if not glm52_data_compat:
+                    raise ValueError("System message must be at the beginning.")
+                # GLM-5.2 allows system messages at any point in a trajectory.
+                # Match XTuner's Qwen3.5 training renderer by preserving that
+                # turn with Qwen role tokens while keeping it out of the loss.
+                append(f"<|im_start|>system\n{content}<|im_end|>\n", False)
             continue
 
         if role == "user":
@@ -349,6 +359,7 @@ def qwen38_tokenize_fn_fastspeed(
     enable_thinking: bool | None = True,
     reasoning_effort: Literal["xhigh", "medium", "low"] = "xhigh",
     preserve_thinking: bool = True,
+    glm52_data_compat: bool = False,
     **kwargs,
 ) -> tuple[list[int], list[int]]:
     text, loss_mask = render_qwen38_chat(
@@ -359,6 +370,7 @@ def qwen38_tokenize_fn_fastspeed(
         enable_thinking=enable_thinking,
         reasoning_effort=reasoning_effort,
         preserve_thinking=preserve_thinking,
+        glm52_data_compat=glm52_data_compat,
     )
     return _tokenize_with_loss_mask(tokenizer, text, loss_mask)
 
@@ -377,6 +389,7 @@ class Qwen38ChatMessages(BaseModel):
         enable_thinking: bool | None = True,
         reasoning_effort: Literal["xhigh", "medium", "low"] = "xhigh",
         preserve_thinking: bool = True,
+        glm52_data_compat: bool = False,
         **kwargs,
     ) -> Dict[str, list[int]]:
         if len(self.messages) == 1 and self.messages[0].get("role") == "pretrain":
@@ -406,6 +419,7 @@ class Qwen38ChatMessages(BaseModel):
             enable_thinking=enable_thinking,
             reasoning_effort=reasoning_effort,
             preserve_thinking=preserve_thinking,
+            glm52_data_compat=glm52_data_compat,
             **kwargs,
         )
         return {"input_ids": input_ids, "labels": labels}

@@ -1,4 +1,3 @@
-import json
 import multiprocessing as py_mp
 from collections.abc import Callable
 from concurrent.futures import Future
@@ -168,10 +167,10 @@ class BaseComposeModel(BaseModel):
         self.multi_modal_projector.save_hf(hf_dir, save_dtype, "model-projector")
         update_weight_map_from_safetensors_index(weight_map_dict, hf_dir)
 
-        if dist.get_rank() == 0:
-            with open(hf_dir / "model.safetensors.index.json", "w") as f:
-                json.dump({"weight_map": weight_map_dict, "metadata": {}}, f, indent=4)
-        dist.barrier()
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            self._write_hf_index_and_config(hf_dir=hf_dir, weight_map=weight_map_dict)
+        if dist.is_initialized():
+            dist.barrier()
 
     def async_save_hf(
         self,

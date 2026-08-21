@@ -90,15 +90,29 @@ extension.
 
 ## Hugging Face save and serving contract
 
-`Qwen3_5_BaseConfig` continues to use the compose family's existing
-`hf_config=None` path. A model loaded from Hugging Face retains `_hf_path`, and
-`save_hf` copies the source `config.json`, tokenizer, processor, and template
-side files before replacing the weight index. Consequently, a saved checkpoint
-keeps the official `model_type=qwen3_5`,
-`architectures=["Qwen3_5ForConditionalGeneration"]`, nested text/vision fields,
-token IDs, and generation metadata. Config-only construction still cannot emit
-a standalone Hugging Face config; that is an existing family-level limitation,
-not silently approximated by this size extension.
+`Qwen3_5_VLDense27BConfig` exports the official Transformers
+`Qwen3_5Config`/`Qwen3_5TextConfig`/`Qwen3_5VisionConfig` objects. The override is
+specific to the explicit 27B config; the ambiguous family-level
+`Qwen3_5_BaseConfig` remains unchanged. A native 256K export matches the
+Transformers 5.14.1 direct round-trip of the pinned checkpoint, including
+`model_type=qwen3_5`, `architectures=["Qwen3_5ForConditionalGeneration"]`, the
+nested hybrid-layer and vision fields, token IDs, and interleaved mRoPE.
+
+When the SFT example selects the 1M extension, the exported `config.json` now
+records both `text_config.max_position_embeddings=1000000` and the static-YaRN
+`rope_parameters` (`factor=4`, `original_max_position_embeddings=262144`,
+`rope_type=yarn`) while retaining `mrope_interleaved=true` and section
+`[11, 11, 10]`. Both synchronous and asynchronous compose saves use this
+regenerated top-level config. If the model was loaded from a Hugging Face
+directory, source tokenizer, processor, generation, chat-template, and custom
+code files are copied first; generated `config.json` and the new weight index
+then replace only their stale source counterparts.
+
+For official-config round-trip parity, the export retains
+`mtp_num_hidden_layers=1` and `mtp_use_dedicated_embeddings=false` as metadata.
+This does not change the MTP decision above: XTuner emits no `mtp.*` tensors,
+Transformers ignores those checkpoint-only keys, and the audited vLLM/SGLang
+loaders skip them.
 
 The latest stable serving releases available during this integration were
 audited at exact tags (source audit only; no GPU engine smoke test):
@@ -108,15 +122,19 @@ audited at exact tags (source audit only; no GPU engine smoke test):
 | vLLM | [0.26.0](https://pypi.org/project/vllm/0.26.0/) | [Registers](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/model_executor/models/registry.py#L560) `Qwen3_5ForConditionalGeneration` and its [dense/VL loader](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/model_executor/models/qwen3_5.py) skips `mtp.*`. The [Hugging Face renderer](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/renderers/hf.py) delegates to `tokenizer.apply_chat_template`, and [sampling](https://github.com/vllm-project/vllm/blob/v0.26.0/vllm/sampling_params.py#L598-L624) merges generation-config EOS IDs with the tokenizer EOS. |
 | SGLang | [0.5.16](https://pypi.org/project/sglang/0.5.16/) | [Exports](https://github.com/sgl-project/sglang/blob/v0.5.16/python/sglang/srt/models/qwen3_5.py#L2045) `Qwen3_5ForConditionalGeneration`; its [dense/VL loader](https://github.com/sgl-project/sglang/blob/v0.5.16/python/sglang/srt/models/qwen3_5.py#L1591-L1611) skips names containing `mtp`. Its [chat endpoint](https://github.com/sgl-project/sglang/blob/v0.5.16/python/sglang/srt/entrypoints/openai/serving_chat.py#L951-L994) delegates to `apply_chat_template`, and [model config](https://github.com/sgl-project/sglang/blob/v0.5.16/python/sglang/srt/configs/model_config.py#L1411-L1429) unions the generation-config EOS IDs. |
 
-These engines therefore consume the unchanged official source config, render
-the official template, honor both published EOS IDs, and apply the same current
-MTP deferral. Static inspection proves the configuration, rendering, stop, and
-weight-loading contracts, but not end-to-end runtime compatibility on a
-specific engine build or accelerator.
+These engines therefore consume an official-schema config (including any
+exported context extension), render the official template, honor both published
+EOS IDs, and apply the same current MTP deferral. Static inspection proves the
+configuration, rendering, stop, and weight-loading contracts, but not
+end-to-end runtime compatibility on a specific engine build or accelerator.
 
 ## Verification
 
 - Assert all 27B config fields and the public alias.
+- Compare the native HF config export with the pinned checkpoint's direct
+  Transformers round-trip, and assert the 1M YaRN fields survive reload.
+- Assert source tokenizer/processor/template side files survive config
+  regeneration while source weights and stale config/index files do not.
 - Assert the official checkpoint index contains exactly the documented 15 MTP
   keys and that the 27B XTuner model has no MTP parameters.
 - Compare rendered text and token IDs against the pinned official tokenizer for
